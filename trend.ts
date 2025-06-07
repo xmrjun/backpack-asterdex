@@ -177,6 +177,22 @@ async function placeOrder(side: "BUY" | "SELL", price: number, amount: number, r
 }
 
 async function placeStopLossOrder(side: "BUY" | "SELL", stopPrice: number) {
+  const ticker = wsTicker; // 获取最新价格
+  if (!ticker) {
+    logTrade("error", `止损单挂单失败：无法获取最新价格`);
+    return;
+  }
+  const last = ticker.last;
+  // 多单止损（SELL），止损价必须低于当前价
+  if (side === "SELL" && stopPrice >= last) {
+    logTrade("error", `止损单价格(${stopPrice})高于或等于当前价(${last})，不挂单`);
+    return;
+  }
+  // 空单止损（BUY），止损价必须高于当前价
+  if (side === "BUY" && stopPrice <= last) {
+    logTrade("error", `止损单价格(${stopPrice})低于或等于当前价(${last})，不挂单`);
+    return;
+  }
   const params: any = {
     symbol: TRADE_SYMBOL,
     side,
@@ -216,6 +232,39 @@ function calcTrailingActivationPrice(entryPrice: number, qty: number, side: "lon
   } else {
     return entryPrice - profit / Math.abs(qty);
   }
+}
+
+// 新增：抽象动态止盈单下单方法
+async function placeTrailingStopOrder(side: "BUY" | "SELL", activationPrice: number, quantity: number) {
+  const ticker = wsTicker;
+  if (!ticker) {
+    logTrade("error", `动态止盈单挂单失败：无法获取最新价格`);
+    return;
+  }
+  const last = ticker.last;
+  // 多单动态止盈（SELL），激活价必须高于当前价
+  if (side === "SELL" && activationPrice <= last) {
+    logTrade("error", `动态止盈单激活价(${activationPrice})低于或等于当前价(${last})，不挂单`);
+    return;
+  }
+  // 空单动态止盈（BUY），激活价必须低于当前价
+  if (side === "BUY" && activationPrice >= last) {
+    logTrade("error", `动态止盈单激活价(${activationPrice})高于或等于当前价(${last})，不挂单`);
+    return;
+  }
+  const params: any = {
+    symbol: TRADE_SYMBOL,
+    side,
+    type: "TRAILING_STOP_MARKET",
+    quantity: toQty3Decimal(quantity),
+    reduceOnly: true,
+    activationPrice: toPrice1Decimal(activationPrice),
+    callbackRate: TRAILING_CALLBACK_RATE,
+    timeInForce: "GTC"
+  };
+  const order = await asterPrivate.fapiPrivatePostOrder(params);
+  logTrade("order", `挂动态止盈单: ${side} TRAILING_STOP_MARKET activationPrice=${params.activationPrice} callbackRate=${TRAILING_CALLBACK_RATE}`);
+  return order;
 }
 
 async function trendStrategy() {
@@ -278,16 +327,7 @@ async function trendStrategy() {
                   const stopPrice = toPrice1Decimal(calcStopLossPrice(posAfter.entryPrice, Math.abs(posAfter.positionAmt), direction as 'long' | 'short', LOSS_LIMIT));
                   await placeStopLossOrder(stopSide, stopPrice);
                   const activationPrice = toPrice1Decimal(calcTrailingActivationPrice(posAfter.entryPrice, Math.abs(posAfter.positionAmt), direction, TRAILING_PROFIT));
-                  await asterPrivate.fapiPrivatePostOrder({
-                    symbol: TRADE_SYMBOL,
-                    side: stopSide,
-                    quantity: Math.abs(posAfter.positionAmt),
-                    type: "TRAILING_STOP_MARKET",
-                    reduceOnly: true,
-                    activationPrice,
-                    callbackRate: TRAILING_CALLBACK_RATE,
-                    timeInForce: "GTC"
-                  });
+                  await placeTrailingStopOrder(stopSide, activationPrice, Math.abs(posAfter.positionAmt));
                   logTrade("order", `挂动态止盈单: ${stopSide} TRAILING_STOP_MARKET activationPrice=${activationPrice} callbackRate=${TRAILING_CALLBACK_RATE}`);
                   break;
                 }
@@ -317,16 +357,7 @@ async function trendStrategy() {
                   const stopPrice = toPrice1Decimal(calcStopLossPrice(posAfter.entryPrice, Math.abs(posAfter.positionAmt), direction as 'long' | 'short', LOSS_LIMIT));
                   await placeStopLossOrder(stopSide, stopPrice);
                   const activationPrice = toPrice1Decimal(calcTrailingActivationPrice(posAfter.entryPrice, Math.abs(posAfter.positionAmt), direction, TRAILING_PROFIT));
-                  await asterPrivate.fapiPrivatePostOrder({
-                    symbol: TRADE_SYMBOL,
-                    side: stopSide,
-                    type: "TRAILING_STOP_MARKET",
-                    quantity: Math.abs(posAfter.positionAmt),
-                    reduceOnly: true,
-                    activationPrice,
-                    callbackRate: TRAILING_CALLBACK_RATE,
-                    timeInForce: "GTC"
-                  });
+                  await placeTrailingStopOrder(stopSide, activationPrice, Math.abs(posAfter.positionAmt));
                   logTrade("order", `挂动态止盈单: ${stopSide} TRAILING_STOP_MARKET activationPrice=${activationPrice} callbackRate=${TRAILING_CALLBACK_RATE}`);
                   break;
                 }
@@ -383,16 +414,7 @@ async function trendStrategy() {
           }
           if (!hasTrailing) {
             // 补挂止盈单
-            await asterPrivate.fapiPrivatePostOrder({
-              symbol: TRADE_SYMBOL,
-              side: stopSide,
-              type: "TRAILING_STOP_MARKET",
-              quantity: Math.abs(pos.positionAmt),
-              reduceOnly: true,
-              activationPrice: toPrice1Decimal(activationPrice),
-              callbackRate: TRAILING_CALLBACK_RATE,
-              timeInForce: "GTC"
-            });
+            await placeTrailingStopOrder(stopSide, toPrice1Decimal(activationPrice), Math.abs(pos.positionAmt));
             logTrade("order", `补挂动态止盈单: ${stopSide} TRAILING_STOP_MARKET activationPrice=${toPrice1Decimal(activationPrice)} callbackRate=${TRAILING_CALLBACK_RATE}`);
           }
           // 止损
@@ -474,7 +496,8 @@ async function trendStrategy() {
         await new Promise(r => setTimeout(r, 1000));
       }
     } catch (e) {
-      await asterPrivate.fapiPrivateDeleteAllOpenOrders({ symbol: TRADE_SYMBOL });
+      // 不再自动撤销所有挂单
+      // await asterPrivate.fapiPrivateDeleteAllOpenOrders({ symbol: TRADE_SYMBOL });
       lastOpenOrderPrice = null;
       lastOpenOrderSide = null;
       lastCloseOrderPrice = null;
