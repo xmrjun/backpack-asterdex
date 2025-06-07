@@ -347,6 +347,32 @@ async function trendStrategy() {
           let openOrders = await asterPrivate.fapiPrivateGetOpenOrders({ symbol: TRADE_SYMBOL });
           let hasStop = openOrders.some((o: any) => o.type === "STOP_MARKET" && o.side === stopSide);
           let hasTrailing = openOrders.some((o: any) => o.type === "TRAILING_STOP_MARKET" && o.side === stopSide);
+
+          // ====== 盈利移动止损功能开始 ======
+          // 若浮盈大于0.1u，止损单移动到保本+0.05u
+          let moveStopProfit = 0.1;
+          let lockProfit = 0.05;
+          if (pnl > moveStopProfit || pos.unrealizedProfit > moveStopProfit) {
+            let newStopPrice = direction === "long"
+              ? pos.entryPrice + lockProfit / Math.abs(pos.positionAmt)
+              : pos.entryPrice - lockProfit / Math.abs(pos.positionAmt);
+            newStopPrice = toPrice1Decimal(newStopPrice);
+            // 查找当前止损单
+            let currentStopOrder = openOrders.find((o: any) => o.type === "STOP_MARKET" && o.side === stopSide);
+            if (!currentStopOrder || Math.abs(parseFloat(currentStopOrder.stopPrice) - newStopPrice) > 0.01) {
+              // 撤销原止损单
+              if (currentStopOrder) {
+                await asterPrivate.fapiPrivateDeleteOrder({ symbol: TRADE_SYMBOL, orderId: currentStopOrder.orderId });
+                logTrade("stop", `盈利移动止损，撤销原止损单: ${stopSide} @ ${currentStopOrder.stopPrice}`);
+              }
+              // 挂新止损单
+              await placeStopLossOrder(stopSide, newStopPrice);
+              logTrade("stop", `盈利移动止损，挂新止损单: ${stopSide} @ ${newStopPrice}`);
+              hasStop = true; // 标记已补挂
+            }
+          }
+          // ====== 盈利移动止损功能结束 ======
+
           if (!hasStop) {
             // 补挂止损单
             await placeStopLossOrder(stopSide, toPrice1Decimal(stopPrice));
