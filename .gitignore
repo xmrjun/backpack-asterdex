@@ -1,0 +1,5 @@
+.env
+.env*
+test.ts
+watch.ts
+node_modules
