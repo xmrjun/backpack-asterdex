@@ -345,29 +345,38 @@ async function trendStrategy() {
             ? (pos.entryPrice + 0.2 / Math.abs(pos.positionAmt))
             : (pos.entryPrice - 0.2 / Math.abs(pos.positionAmt));
           let openOrders = await asterPrivate.fapiPrivateGetOpenOrders({ symbol: TRADE_SYMBOL });
-
-          // 盈利大于0.1u时，止损单移动到盈利0.05u
-          if (pnl > 0.1) {
-            let protectProfit = 0.05;
-            let newStopPrice = direction === "long"
-              ? pos.entryPrice + protectProfit / Math.abs(pos.positionAmt)
-              : pos.entryPrice - protectProfit / Math.abs(pos.positionAmt);
-            newStopPrice = toPrice1Decimal(newStopPrice);
-            // 检查当前止损单是否已在该位置
-            let hasProtectStop = openOrders.some(
-              (o: any) => o.type === "STOP_MARKET" && o.side === stopSide && Math.abs(o.stopPrice - newStopPrice) < 0.01
-            );
-            if (!hasProtectStop) {
-              // 撤销原止损单
-              await asterPrivate.fapiPrivateDeleteAllOpenOrders({ symbol: TRADE_SYMBOL });
-              // 挂新的止损单
-              await placeStopLossOrder(stopSide, newStopPrice);
-              logTrade("stop", `盈利>0.1u，止损单上移到保本+0.05u: ${stopSide} STOP_MARKET @ ${newStopPrice}`);
-            }
-          }
-
           let hasStop = openOrders.some((o: any) => o.type === "STOP_MARKET" && o.side === stopSide);
           let hasTrailing = openOrders.some((o: any) => o.type === "TRAILING_STOP_MARKET" && o.side === stopSide);
+
+          // ====== 盈利移动止损单逻辑开始 ======
+          // 计算盈利0.05u对应的止损价
+          let profitMove = 0.05;
+          let profitMoveStopPrice = direction === "long"
+            ? toPrice1Decimal(pos.entryPrice + profitMove / Math.abs(pos.positionAmt))
+            : toPrice1Decimal(pos.entryPrice - profitMove / Math.abs(pos.positionAmt));
+          // 查找当前止损单
+          let currentStopOrder = openOrders.find((o: any) => o.type === "STOP_MARKET" && o.side === stopSide);
+          // 只要盈利大于0.1u就触发
+          if (pnl > 0.1 || pos.unrealizedProfit > 0.1) {
+            if (!currentStopOrder) {
+              // 没有止损单，直接在盈利0.05u处挂止损单
+              await placeStopLossOrder(stopSide, profitMoveStopPrice);
+              hasStop = true; // 避免后续重复补挂
+              logTrade("stop", `盈利大于0.1u，挂盈利0.05u止损单: ${stopSide} @ ${profitMoveStopPrice}`);
+            } else {
+              // 有止损单，判断价格是否一致
+              let curStopPrice = parseFloat(currentStopOrder.stopPrice);
+              if (Math.abs(curStopPrice - profitMoveStopPrice) > 0.01) {
+                // 价格不一致，取消原止损单再挂新单
+                await asterPrivate.fapiPrivateDeleteOrder({ symbol: TRADE_SYMBOL, orderId: currentStopOrder.orderId });
+                await placeStopLossOrder(stopSide, profitMoveStopPrice);
+                logTrade("stop", `盈利大于0.1u，移动止损单到盈利0.05u: ${stopSide} @ ${profitMoveStopPrice}`);
+                hasStop = true; // 避免后续重复补挂
+              }
+            }
+          }
+          // ====== 盈利移动止损单逻辑结束 ======
+
           if (!hasStop) {
             // 补挂止损单
             await placeStopLossOrder(stopSide, toPrice1Decimal(stopPrice));
