@@ -32,15 +32,13 @@ pnpm install
 
 ### 配置
 
-请在 config.ts 文件中配置相关参数，例如 API Key、Secret、监听的交易对等。
+请在 .env 文件中配置相关参数，例如 API Key、Secret、监听的交易对等。
 
-```ts
-export const config = {
-  bitgetApiKey: '你的Bitget API Key',
-  bitgetSecret: '你的Bitget Secret',
-  asterApiKey: '你的AsterDex API Key',
-  // 其他配置项
-}
+```env
+BITGET_API_KEY=你的Bitget_API_Key
+BITGET_SECRET=你的Bitget_Secret
+ASTER_API_KEY=你的AsterDex_API_Key
+# 其他配置项
 ```
 
 ### 启动机器人
