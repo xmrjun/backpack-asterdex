@@ -214,7 +214,7 @@ async function waitAsterFilled(orderId: string) {
     try {
       const res = await asterPrivate.fapiPrivateGetOrder({ symbol: TRADE_SYMBOL, orderId });
       if (res.status === "FILLED") return true;
-      if (res.status === "CANCELED" || res.status === "REJECTED") return false;
+      return false;
     } catch {}
     await new Promise(r => setTimeout(r, 1000));
   }
@@ -305,18 +305,7 @@ async function startArbBot(handlers: BotEventHandlers = {}) {
           handlers.onLog?.('[套利成功] 已持有仓位，等待平仓机会');
           handlers.onStats?.(getStats());
         } else if (diff2 > ARB_THRESHOLD) {
-          const bitgetOrder = await placeBitgetOrder("buy", TRADE_AMOUNT, bitgetAsk, false);
-          if (!bitgetOrder || !bitgetOrder.data || !bitgetOrder.data.orderId) {
-            await closeAllPositions();
-            logEvent('error', 'Bitget下单失败，已平仓');
-            continue;
-          }
-          const bitgetFilled = await waitBitgetFilled(bitgetOrder.data.orderId);
-          if (!bitgetFilled) {
-            await closeAllPositions();
-            logEvent('error', 'Bitget未成交，已平仓');
-            continue;
-          }
+          // 先在aster下SELL单
           const asterOrder = await placeAsterOrder("SELL", TRADE_AMOUNT, asterBid, false);
           if (!asterOrder || !asterOrder.orderId) {
             await closeAllPositions();
@@ -329,6 +318,19 @@ async function startArbBot(handlers: BotEventHandlers = {}) {
             logEvent('error', 'Aster未成交，已平仓');
             continue;
           }
+          // aster成交后再在bitget下buy单
+          const bitgetOrder = await placeBitgetOrder("buy", TRADE_AMOUNT, bitgetAsk, false);
+          if (!bitgetOrder || !bitgetOrder.data || !bitgetOrder.data.orderId) {
+            await closeAllPositions();
+            logEvent('error', 'Bitget下单失败，已平仓');
+            continue;
+          }
+          const bitgetFilled = await waitBitgetFilled(bitgetOrder.data.orderId);
+          if (!bitgetFilled) {
+            await closeAllPositions();
+            logEvent('error', 'Bitget未成交，已平仓');
+            continue;
+          }
           lastAsterSide = "SELL";
           lastBitgetSide = "buy";
           holding = true;
@@ -336,9 +338,9 @@ async function startArbBot(handlers: BotEventHandlers = {}) {
           entryPriceBitget = bitgetAsk;
           stats.totalTrades++;
           stats.totalAmount += TRADE_AMOUNT;
-          logEvent('open', `Bitget买入${TRADE_AMOUNT}@${bitgetAsk}，Aster卖出${TRADE_AMOUNT}@${asterBid}`);
-          handlers.onTrade?.({ side: 'long', amount: TRADE_AMOUNT, price: bitgetAsk, exchange: 'bitget', type: 'open' });
+          logEvent('open', `Aster卖出${TRADE_AMOUNT}@${asterBid}，Bitget买入${TRADE_AMOUNT}@${bitgetAsk}`);
           handlers.onTrade?.({ side: 'short', amount: TRADE_AMOUNT, price: asterBid, exchange: 'aster', type: 'open' });
+          handlers.onTrade?.({ side: 'long', amount: TRADE_AMOUNT, price: bitgetAsk, exchange: 'bitget', type: 'open' });
           handlers.onLog?.('[套利成功] 已持有仓位，等待平仓机会');
           handlers.onStats?.(getStats());
         } else {
