@@ -3,3 +3,7 @@ export const TRADE_AMOUNT = 0.002;
 export const ARB_THRESHOLD = 40;
 export const CLOSE_DIFF = 3; // 3U
 export const PROFIT_DIFF_LIMIT = 1; // 平仓时两个交易所收益差额阈值，单位USDT
+export const LOSS_LIMIT = 0.1; // 单笔最大亏损USDT
+export const STOP_LOSS_DIST = 0.1; // 止损距离USDT
+export const TRAILING_PROFIT = 0.2; // 动态止盈激活利润USDT
+export const TRAILING_CALLBACK_RATE = 0.5; // 动态止盈回撤百分比

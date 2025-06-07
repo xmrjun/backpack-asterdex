@@ -1,6 +1,7 @@
 import { pro as ccxt } from "ccxt";
 import "dotenv/config";
 import chalk from "chalk";
+import { TRADE_SYMBOL, TRADE_AMOUNT, LOSS_LIMIT, STOP_LOSS_DIST, TRAILING_PROFIT, TRAILING_CALLBACK_RATE } from "./config";
 
 const asterPrivate = new ccxt.binance({
   apiKey: process.env.ASTER_API_KEY,
@@ -32,11 +33,6 @@ const aster = new ccxt.binance({
   options: { defaultType: "swap" },
   urls: asterPrivate.urls,
 });
-
-const TRADE_SYMBOL = "BTCUSDT";
-const TRADE_AMOUNT = 0.002;
-const LOSS_LIMIT = 0.1;
-const STOP_LOSS_DIST = 0.1; // 止损距离，单位USDT
 
 let wsOrderbook: any = null;
 let wsTicker: any = null;
@@ -279,9 +275,9 @@ async function trendStrategy() {
                 if (Math.abs(posAfter.positionAmt) > 0.00001 && posAfter.entryPrice > 0) {
                   const direction = posAfter.positionAmt > 0 ? "long" : "short";
                   const stopSide = direction === "long" ? "SELL" : "BUY";
-                  const stopPrice = toPrice1Decimal(calcStopLossPrice(posAfter.entryPrice, Math.abs(posAfter.positionAmt), direction as 'long' | 'short', 0.1));
+                  const stopPrice = toPrice1Decimal(calcStopLossPrice(posAfter.entryPrice, Math.abs(posAfter.positionAmt), direction as 'long' | 'short', LOSS_LIMIT));
                   await placeStopLossOrder(stopSide, stopPrice);
-                  const activationPrice = toPrice1Decimal(calcTrailingActivationPrice(posAfter.entryPrice, Math.abs(posAfter.positionAmt), direction, 0.2));
+                  const activationPrice = toPrice1Decimal(calcTrailingActivationPrice(posAfter.entryPrice, Math.abs(posAfter.positionAmt), direction, TRAILING_PROFIT));
                   await asterPrivate.fapiPrivatePostOrder({
                     symbol: TRADE_SYMBOL,
                     side: stopSide,
@@ -289,10 +285,10 @@ async function trendStrategy() {
                     type: "TRAILING_STOP_MARKET",
                     reduceOnly: true,
                     activationPrice,
-                    callbackRate: 0.5,
+                    callbackRate: TRAILING_CALLBACK_RATE,
                     timeInForce: "GTC"
                   });
-                  logTrade("order", `挂动态止盈单: ${stopSide} TRAILING_STOP_MARKET activationPrice=${activationPrice} callbackRate=0.5`);
+                  logTrade("order", `挂动态止盈单: ${stopSide} TRAILING_STOP_MARKET activationPrice=${activationPrice} callbackRate=${TRAILING_CALLBACK_RATE}`);
                   break;
                 }
                 await new Promise(r => setTimeout(r, 500));
@@ -318,9 +314,9 @@ async function trendStrategy() {
                 if (Math.abs(posAfter.positionAmt) > 0.00001 && posAfter.entryPrice > 0) {
                   const direction = posAfter.positionAmt > 0 ? "long" : "short";
                   const stopSide = direction === "long" ? "SELL" : "BUY";
-                  const stopPrice = toPrice1Decimal(calcStopLossPrice(posAfter.entryPrice, Math.abs(posAfter.positionAmt), direction as 'long' | 'short', 0.1));
+                  const stopPrice = toPrice1Decimal(calcStopLossPrice(posAfter.entryPrice, Math.abs(posAfter.positionAmt), direction as 'long' | 'short', LOSS_LIMIT));
                   await placeStopLossOrder(stopSide, stopPrice);
-                  const activationPrice = toPrice1Decimal(calcTrailingActivationPrice(posAfter.entryPrice, Math.abs(posAfter.positionAmt), direction, 0.2));
+                  const activationPrice = toPrice1Decimal(calcTrailingActivationPrice(posAfter.entryPrice, Math.abs(posAfter.positionAmt), direction, TRAILING_PROFIT));
                   await asterPrivate.fapiPrivatePostOrder({
                     symbol: TRADE_SYMBOL,
                     side: stopSide,
@@ -328,10 +324,10 @@ async function trendStrategy() {
                     quantity: Math.abs(posAfter.positionAmt),
                     reduceOnly: true,
                     activationPrice,
-                    callbackRate: 0.5,
+                    callbackRate: TRAILING_CALLBACK_RATE,
                     timeInForce: "GTC"
                   });
-                  logTrade("order", `挂动态止盈单: ${stopSide} TRAILING_STOP_MARKET activationPrice=${activationPrice} callbackRate=0.5`);
+                  logTrade("order", `挂动态止盈单: ${stopSide} TRAILING_STOP_MARKET activationPrice=${activationPrice} callbackRate=${TRAILING_CALLBACK_RATE}`);
                   break;
                 }
                 await new Promise(r => setTimeout(r, 500));
@@ -364,10 +360,10 @@ async function trendStrategy() {
               quantity: Math.abs(pos.positionAmt),
               reduceOnly: true,
               activationPrice: toPrice1Decimal(activationPrice),
-              callbackRate: 0.5,
+              callbackRate: TRAILING_CALLBACK_RATE,
               timeInForce: "GTC"
             });
-            logTrade("order", `补挂动态止盈单: ${stopSide} TRAILING_STOP_MARKET activationPrice=${toPrice1Decimal(activationPrice)} callbackRate=0.5`);
+            logTrade("order", `补挂动态止盈单: ${stopSide} TRAILING_STOP_MARKET activationPrice=${toPrice1Decimal(activationPrice)} callbackRate=${TRAILING_CALLBACK_RATE}`);
           }
           // 止损
           if (pnl < -LOSS_LIMIT || pos.unrealizedProfit < -LOSS_LIMIT) {
