@@ -213,7 +213,7 @@ async function marketClose(side: "SELL" | "BUY") {
     side,
     type: "MARKET",
     quantity: toQty3Decimal(TRADE_AMOUNT),
-    closePosition: true
+    reduceOnly: true
   });
   logTrade("close", `市价平仓: ${side}`);
 }
