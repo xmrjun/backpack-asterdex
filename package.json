@@ -11,7 +11,8 @@
     "test": "vitest run",
     "cli:start": "tsx cli.ts start",
     "cli:log": "tsx cli.ts log",
-    "cli:reset": "tsx cli.ts reset"
+    "cli:reset": "tsx cli.ts reset",
+    "aster:test": "vitest run exchanges/aster.test.ts"
   },
   "keywords": [],
   "author": "",
@@ -23,7 +24,8 @@
     "cli-table3": "^0.6.5",
     "commander": "^14.0.0",
     "dotenv": "^16.5.0",
-    "ora": "^8.2.0"
+    "ora": "^8.2.0",
+    "ws": "^8.18.2"
   },
   "devDependencies": {
     "@types/node": "^22.15.30",

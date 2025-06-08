@@ -26,6 +26,9 @@ importers:
       ora:
         specifier: ^8.2.0
         version: 8.2.0
+      ws:
+        specifier: ^8.18.2
+        version: 8.18.2
     devDependencies:
       '@types/node':
         specifier: ^22.15.30
