@@ -310,24 +310,31 @@ export class Aster {
         };
         // 连接成功后再订阅用户数据流和恢复所有订阅
         this.ws.onopen = async () => {
-            // 初始化账户快照
-            await this.initAccountSnapshot();
-            // 重新订阅所有普通频道
-            for (const channel of this.subscribedChannels) {
-                this.subscribe({ params: [channel], id: Math.floor(Math.random() * 10000) });
-            }
-            // 重新订阅账户 listenKey 频道（需获取新 listenKey）
-            await this.subscribeUserData();
-            // 定时发送pong帧，防止被服务端断开
-            this.pongIntervalId = setInterval(() => {
-                if (this.ws.readyState === WebSocket.OPEN) {
-                    this.ws.send('pong');
+            try {
+                await this.initAccountSnapshot();
+                // 重新订阅所有普通频道
+                for (const channel of this.subscribedChannels) {
+                    this.subscribe({ params: [channel], id: Math.floor(Math.random() * 10000) });
                 }
-            }, 4 * 60 * 1000); // 每4分钟发一次
-            // 定时延长 listenKey 有效期
-            this.listenKeyKeepAliveIntervalId = setInterval(() => {
-                this.extendListenKey();
-            }, 45 * 60 * 1000); // 每45分钟
+                // 重新订阅账户 listenKey 频道（需获取新 listenKey）
+                await this.subscribeUserData();
+                // 定时发送pong帧，防止被服务端断开
+                this.pongIntervalId = setInterval(() => {
+                    if (this.ws.readyState === WebSocket.OPEN) {
+                        this.ws.send('pong');
+                    }
+                }, 4 * 60 * 1000); // 每4分钟发一次
+                // 定时延长 listenKey 有效期
+                this.listenKeyKeepAliveIntervalId = setInterval(() => {
+                    this.extendListenKey();
+                }, 45 * 60 * 1000); // 每45分钟
+            } catch (err) {
+                console.error("WebSocket onopen 初始化失败:", err);
+                // 关闭后自动重连
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.close();
+                }
+            }
         };
         this.ws.onclose = () => {
             if (this.pongIntervalId) {
@@ -350,14 +357,19 @@ export class Aster {
 
     private async publicRequest(path: string, method: string, params: any) {
         const url = `${this.baseURL}${path}`;
-        const response = await fetch(url, {
-            method,
-            headers: {
-                'Content-Type': 'application/json',
-            },
-        });
-        const data = await response.json();
-        return data;
+        try {
+            const response = await fetch(url, {
+                method,
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+            });
+            const data = await response.json();
+            return data;
+        } catch (err) {
+            console.error("publicRequest 网络请求失败:", err);
+            throw err;
+        }
     }
 
     private generateSignature(params: any) {
@@ -389,9 +401,14 @@ export class Aster {
         } else {
             fetchOptions.body = `${paramStr}&signature=${signature}`;
         }
-        const response = await fetch(url, fetchOptions);
-        const data = await response.json();
-        return data;
+        try {
+            const response = await fetch(url, fetchOptions);
+            const data = await response.json();
+            return data;
+        } catch (err) {
+            console.error("signedRequest 网络请求失败:", err);
+            throw err;
+        }
     }
 
     public async ping() {
@@ -801,14 +818,26 @@ export class Aster {
     }
 
     // 初始化账户快照
-    private async initAccountSnapshot() {
-        const account = await this.getAccount();
-        this.accountSnapshot = account;
-        // 初始化挂单快照
-        const openOrders = await this.getOpenOrders({ symbol: this.defaultMarket });
-        this.openOrders.clear();
-        for (const order of openOrders) {
-            this.openOrders.set(order.orderId, order);
+    private async initAccountSnapshot(retry = 0) {
+        try {
+            const account = await this.getAccount();
+            this.accountSnapshot = account;
+            // 初始化挂单快照
+            const openOrders = await this.getOpenOrders({ symbol: this.defaultMarket });
+            this.openOrders.clear();
+            for (const order of openOrders) {
+                this.openOrders.set(order.orderId, order);
+            }
+        } catch (err) {
+            console.error("initAccountSnapshot 失败，准备重试:", err);
+            if (retry < 5) {
+                setTimeout(() => this.initAccountSnapshot(retry + 1), 2000 * (retry + 1));
+            } else {
+                // 超过最大重试次数，2秒后重连WebSocket
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.close();
+                }
+            }
         }
     }
 
