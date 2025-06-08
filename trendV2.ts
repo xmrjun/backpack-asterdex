@@ -539,12 +539,6 @@ async function trendStrategy() {
           toPrice1Decimal(activationPrice),
           Math.abs(pos.positionAmt)
         );
-        logTrade(
-          "order",
-          `补挂动态止盈单: ${stopSide} TRAILING_STOP_MARKET activationPrice=${toPrice1Decimal(
-            activationPrice
-          )} callbackRate=${TRAILING_CALLBACK_RATE}`
-        );
       }
       if (pnl < -LOSS_LIMIT || pos.unrealizedProfit < -LOSS_LIMIT) {
         if (openOrders.length > 0) {
@@ -591,8 +585,7 @@ async function trendStrategy() {
           if (needCloseOrder && closeSide && closePrice) {
             if (openOrders.length > 0) {
               isOperating = true;
-              const orderIdList = openOrders.map(o => o.orderId);
-              await aster.cancelOrders({ symbol: TRADE_SYMBOL, orderIdList });
+              await aster.cancelAllOrders({ symbol: TRADE_SYMBOL });
               pendingOrderId = null;
             }
             isOperating = true;
@@ -615,8 +608,7 @@ async function trendStrategy() {
           if (pendingCloseOrder) {
             if (openOrders.length > 0) {
               isOperating = true;
-              const orderIdList = openOrders.map(o => o.orderId);
-              await aster.cancelOrders({ symbol: TRADE_SYMBOL, orderIdList });
+              await aster.cancelAllOrders({ symbol: TRADE_SYMBOL });
               pendingOrderId = null;
             }
             pendingCloseOrder = null;
