@@ -170,22 +170,22 @@ aster.watchAccount((data) => {
   // 账户更新不再直接解锁
 });
 aster.watchOrder((orders: AsterOrder[]) => {
-  openOrders = Array.isArray(orders) ? orders : [];
-  // 检查pendingOrderId相关逻辑
+  // 先用原始 orders 判断 pendingOrderId 是否需要解锁
   if (pendingOrderId) {
-    const pendingOrder = openOrders.find(o => String(o.orderId) === String(pendingOrderId));
-    // 如果原本没有pendingOrderId的订单，现在有了，或者状态发生变化（如不是NEW），都要解锁
+    const pendingOrder = orders.find(o => String(o.orderId) === String(pendingOrderId));
     if (pendingOrder) {
       if (pendingOrder.status && pendingOrder.status !== "NEW") {
         unlockOperating();
       }
     } else {
-      // openOrders里没有pendingOrderId对应的订单，说明已成交或撤销
+      // orders 里没有 pendingOrderId 对应的订单，说明已成交或撤销
       unlockOperating();
     }
-  } else if (openOrders.length === 0) {
+  } else if (orders.length === 0) {
     unlockOperating();
   }
+  // 过滤掉 market 类型订单再赋值给 openOrders
+  openOrders = Array.isArray(orders) ? orders.filter(o => o.type !== 'MARKET') : [];
 });
 aster.watchDepth(TRADE_SYMBOL, (depth: AsterDepth) => {
   depthSnapshot = depth;

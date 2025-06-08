@@ -146,6 +146,7 @@ export interface AsterOrder {
     ot?: string;                // 原始订单类型
     cp?: boolean;               // 是否为触发平仓单
     rp?: string;                // 该交易实现盈亏
+    _pushedOnce?: boolean;      // 标记是否已推送过一次
 }
 
 // 深度档位
@@ -962,7 +963,26 @@ export class Aster {
         if (order.status === 'NEW' || order.status === 'PARTIALLY_FILLED') {
             this.openOrders.set(order.orderId, order);
         } else {
-            this.openOrders.delete(order.orderId);
+            // 市价单特殊处理：至少推送一次后再删除
+            const prev = this.openOrders.get(order.orderId);
+            if (order.type === 'MARKET') {
+                if (!prev || !prev._pushedOnce) {
+                    // 第一次推送，做标记，不删
+                    order._pushedOnce = true;
+                    this.openOrders.set(order.orderId, order);
+                } else {
+                    // 已推送过一次，删除
+                    this.openOrders.delete(order.orderId);
+                }
+            } else {
+                this.openOrders.delete(order.orderId);
+            }
+        }
+        // 主动清理所有已推送过的市价单
+        for (const [id, o] of this.openOrders) {
+            if (o.type === 'MARKET' && o._pushedOnce) {
+                this.openOrders.delete(id);
+            }
         }
         // 推送最新挂单列表
         this.orderUpdateCallbacks.forEach(cb => cb(Array.from(this.openOrders.values())));
