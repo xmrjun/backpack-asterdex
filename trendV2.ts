@@ -40,9 +40,10 @@ let klineSnapshot: AsterKline[] = [];
 let tradeLog: TradeLogItem[] = [];
 let totalProfit = 0;
 let totalTrades = 0;
-let isOperating = false;
-let pendingOrderId: string | null = null;
-let unlockTimer: NodeJS.Timeout | null = null;
+// 多类型订单锁
+let orderTypeLocks: { [key: string]: boolean } = {};
+let orderTypePendingOrderId: { [key: string]: string | null } = {};
+let orderTypeUnlockTimer: { [key: string]: NodeJS.Timeout | null } = {};
 
 function logTrade(type: string, detail: string) {
   tradeLog.push({ time: new Date().toLocaleString(), type, detail });
@@ -170,20 +171,21 @@ aster.watchAccount((data) => {
   // 账户更新不再直接解锁
 });
 aster.watchOrder((orders: AsterOrder[]) => {
-  // 先用原始 orders 判断 pendingOrderId 是否需要解锁
+  // 针对每种类型分别判断pendingOrderId是否需要解锁
+  Object.keys(orderTypePendingOrderId).forEach(type => {
+    const pendingOrderId = orderTypePendingOrderId[type];
   if (pendingOrderId) {
     const pendingOrder = orders.find(o => String(o.orderId) === String(pendingOrderId));
     if (pendingOrder) {
       if (pendingOrder.status && pendingOrder.status !== "NEW") {
-        unlockOperating();
+          unlockOperating(type);
       }
     } else {
       // orders 里没有 pendingOrderId 对应的订单，说明已成交或撤销
-      unlockOperating();
+        unlockOperating(type);
+      }
     }
-  } else if (orders.length === 0) {
-    unlockOperating();
-  }
+  });
   // 过滤掉 market 类型订单再赋值给 openOrders
   openOrders = Array.isArray(orders) ? orders.filter(o => o.type !== 'MARKET') : [];
 });
@@ -223,44 +225,45 @@ function getSMA30() {
   return closes.reduce((a, b) => a + b, 0) / closes.length;
 }
 
-function lockOperating(timeout = 3000) {
-  isOperating = true;
-  if (unlockTimer) clearTimeout(unlockTimer);
-  unlockTimer = setTimeout(() => {
-    isOperating = false;
-    pendingOrderId = null;
-    logTrade("error", "操作超时自动解锁");
+function isOperating(type: string) {
+  return !!orderTypeLocks[type];
+}
+
+function lockOperating(type: string, timeout = 3000) {
+  orderTypeLocks[type] = true;
+  if (orderTypeUnlockTimer[type]) clearTimeout(orderTypeUnlockTimer[type]!);
+  orderTypeUnlockTimer[type] = setTimeout(() => {
+    orderTypeLocks[type] = false;
+    orderTypePendingOrderId[type] = null;
+    logTrade("error", `${type}操作超时自动解锁`);
   }, timeout);
 }
-function unlockOperating() {
-  isOperating = false;
-  pendingOrderId = null;
-  if (unlockTimer) clearTimeout(unlockTimer);
-  unlockTimer = null;
+function unlockOperating(type: string) {
+  orderTypeLocks[type] = false;
+  orderTypePendingOrderId[type] = null;
+  if (orderTypeUnlockTimer[type]) clearTimeout(orderTypeUnlockTimer[type]!);
+  orderTypeUnlockTimer[type] = null;
 }
 
 async function deduplicateOrders(type: string, side: string) {
-  // 找出同类型同方向的订单
   const sameTypeOrders = openOrders.filter(o => o.type === type && o.side === side);
   if (sameTypeOrders.length <= 1) return;
-  // 按时间排序，保留最新
   sameTypeOrders.sort((a, b) => {
-    // updateTime 优先，没有就用 time
     const ta = b.updateTime || b.time || 0;
     const tb = a.updateTime || a.time || 0;
     return ta - tb;
   });
-  const toCancel = sameTypeOrders.slice(1); // 除最新外的都撤销
+  const toCancel = sameTypeOrders.slice(1);
   const orderIdList = toCancel.map(o => o.orderId);
   if (orderIdList.length > 0) {
     try {
-      lockOperating();
+      lockOperating(type);
       await aster.cancelOrders({ symbol: TRADE_SYMBOL, orderIdList });
       logTrade("order", `去重撤销重复${type}单: ${orderIdList.join(",")}`);
     } catch (e) {
       logTrade("error", `去重撤单失败: ${e}`);
     } finally {
-      unlockOperating();
+      unlockOperating(type);
     }
   }
 }
@@ -271,34 +274,37 @@ async function placeOrder(
   amount: number,
   reduceOnly = false
 ) {
+  const type = "LIMIT";
+  if (isOperating(type)) return;
   const params: CreateOrderParams = {
     symbol: TRADE_SYMBOL,
     side,
-    type: "LIMIT",
+    type,
     quantity: toQty3Decimal(amount),
     price: toPrice1Decimal(price),
     timeInForce: "GTX",
   };
   if (reduceOnly) params.reduceOnly = "true";
-  // 强制只保留1位小数
   params.price = toPrice1Decimal(params.price!);
-  await deduplicateOrders("LIMIT", side);
-  lockOperating();
+  await deduplicateOrders(type, side);
+  lockOperating(type);
   try {
     const order = await aster.createOrder(params);
-    pendingOrderId = order.orderId;
+    orderTypePendingOrderId[type] = order.orderId;
     logTrade(
       "order",
       `挂单: ${side} @ ${params.price} 数量: ${params.quantity} reduceOnly: ${reduceOnly}`
     );
     return order;
   } catch (e) {
-    unlockOperating();
+    unlockOperating(type);
     throw e;
   }
 }
 
 async function placeStopLossOrder(side: "BUY" | "SELL", stopPrice: number) {
+  const type = "STOP_MARKET";
+  if (isOperating(type)) return;
   if (!tickerSnapshot) {
     logTrade("error", `止损单挂单失败：无法获取最新价格`);
     return;
@@ -321,43 +327,44 @@ async function placeStopLossOrder(side: "BUY" | "SELL", stopPrice: number) {
   const params: CreateOrderParams = {
     symbol: TRADE_SYMBOL,
     side,
-    type: "STOP_MARKET",
+    type,
     stopPrice: toPrice1Decimal(stopPrice),
     closePosition: "true",
     timeInForce: "GTC",
     quantity: toQty3Decimal(TRADE_AMOUNT),
   };
-  // 强制只保留1位小数
   params.stopPrice = toPrice1Decimal(params.stopPrice!);
-  await deduplicateOrders("STOP_MARKET", side);
-  lockOperating();
+  await deduplicateOrders(type, side);
+  lockOperating(type);
   try {
     const order = await aster.createOrder(params);
-    pendingOrderId = order.orderId;
+    orderTypePendingOrderId[type] = order.orderId;
     logTrade("stop", `挂止损单: ${side} STOP_MARKET @ ${params.stopPrice}`);
     return order;
   } catch (e) {
-    unlockOperating();
+    unlockOperating(type);
     throw e;
   }
 }
 
 async function marketClose(side: "SELL" | "BUY") {
+  const type = "MARKET";
+  if (isOperating(type)) return;
   const params: CreateOrderParams = {
     symbol: TRADE_SYMBOL,
     side,
-    type: "MARKET",
+    type,
     quantity: toQty3Decimal(TRADE_AMOUNT),
     reduceOnly: "true",
   };
-  await deduplicateOrders("MARKET", side);
-  lockOperating();
+  await deduplicateOrders(type, side);
+  lockOperating(type);
   try {
     const order = await aster.createOrder(params);
-    pendingOrderId = order.orderId;
+    orderTypePendingOrderId[type] = order.orderId;
     logTrade("close", `市价平仓: ${side}`);
   } catch (e) {
-    unlockOperating();
+    unlockOperating(type);
     throw e;
   }
 }
@@ -392,30 +399,31 @@ async function placeTrailingStopOrder(
   activationPrice: number,
   quantity: number
 ) {
+  const type = "TRAILING_STOP_MARKET";
+  if (isOperating(type)) return;
   const params: CreateOrderParams = {
     symbol: TRADE_SYMBOL,
     side,
-    type: "TRAILING_STOP_MARKET",
+    type,
     quantity: toQty3Decimal(quantity),
     reduceOnly: "true",
     activationPrice: toPrice1Decimal(activationPrice),
     callbackRate: TRAILING_CALLBACK_RATE,
     timeInForce: "GTC",
   };
-  // 强制只保留1位小数
   params.activationPrice = toPrice1Decimal(params.activationPrice!);
-  await deduplicateOrders("TRAILING_STOP_MARKET", side);
-  lockOperating();
+  await deduplicateOrders(type, side);
+  lockOperating(type);
   try {
     const order = await aster.createOrder(params);
-    pendingOrderId = order.orderId;
+    orderTypePendingOrderId[type] = order.orderId;
     logTrade(
       "order",
       `挂动态止盈单: ${side} TRAILING_STOP_MARKET activationPrice=${params.activationPrice} callbackRate=${TRAILING_CALLBACK_RATE}`
     );
     return order;
   } catch (e) {
-    unlockOperating();
+    unlockOperating(type);
     throw e;
   }
 }
@@ -432,7 +440,7 @@ async function trendStrategy() {
   let pendingCloseOrder = null;
   while (true) {
     await new Promise((r) => setTimeout(r, 500));
-    if (isOperating) continue;
+    if (isOperating("MARKET")) continue;
     // 快照数据未准备好
     if (
       !accountSnapshot ||
@@ -468,9 +476,8 @@ async function trendStrategy() {
     if (Math.abs(pos.positionAmt) < 0.00001) {
       // 撤销所有普通挂单和止损单
       if (openOrders.length > 0) {
-        isOperating = true;
+        isOperating("MARKET");
         await aster.cancelAllOrders({ symbol: TRADE_SYMBOL });
-        pendingOrderId = null;
       }
       lastStopOrderSide = null;
       lastStopOrderPrice = null;
@@ -479,12 +486,11 @@ async function trendStrategy() {
       if (lastPrice !== null) {
         if (lastPrice > lastSMA30 && price < lastSMA30) {
           if (openOrders.length > 0) {
-            isOperating = true;
+            isOperating("MARKET");
             const orderIdList = openOrders.map(o => o.orderId);
             await aster.cancelOrders({ symbol: TRADE_SYMBOL, orderIdList });
-            pendingOrderId = null;
           }
-          isOperating = true;
+          isOperating("MARKET");
           const params: CreateOrderParams = {
             symbol: TRADE_SYMBOL,
             side: "SELL",
@@ -497,12 +503,11 @@ async function trendStrategy() {
           lastOpenOrderPrice = price;
         } else if (lastPrice < lastSMA30 && price > lastSMA30) {
           if (openOrders.length > 0) {
-            isOperating = true;
+            isOperating("MARKET");
             const orderIdList = openOrders.map(o => o.orderId);
             await aster.cancelOrders({ symbol: TRADE_SYMBOL, orderIdList });
-            pendingOrderId = null;
           }
-          isOperating = true;
+          isOperating("MARKET");
           const params: CreateOrderParams = {
             symbol: TRADE_SYMBOL,
             side: "BUY",
@@ -557,8 +562,7 @@ async function trendStrategy() {
       );
       if (pnl > 0.1 || pos.unrealizedProfit > 0.1) {
         if (!currentStopOrder) {
-          isOperating = true;
-          pendingOrderId = null;
+          isOperating("MARKET");
           await placeStopLossOrder(stopSide, profitMoveStopPrice);
           hasStop = true;
           logTrade(
@@ -568,14 +572,12 @@ async function trendStrategy() {
         } else {
           let curStopPrice = parseFloat(currentStopOrder.stopPrice);
           if (Math.abs(curStopPrice - profitMoveStopPrice) > 0.01) {
-            isOperating = true;
-            pendingOrderId = String(currentStopOrder.orderId);
+            isOperating("MARKET");
             await aster.cancelOrder({
               symbol: TRADE_SYMBOL,
               orderId: currentStopOrder.orderId,
             });
-            isOperating = true;
-            pendingOrderId = null;
+            isOperating("MARKET");
             await placeStopLossOrder(stopSide, profitMoveStopPrice);
             logTrade(
               "stop",
@@ -586,13 +588,11 @@ async function trendStrategy() {
         }
       }
       if (!hasStop) {
-        isOperating = true;
-        pendingOrderId = null;
+        isOperating("MARKET");
         await placeStopLossOrder(stopSide, toPrice1Decimal(stopPrice));
       }
       if (!hasTrailing) {
-        isOperating = true;
-        pendingOrderId = null;
+        isOperating("MARKET");
         await placeTrailingStopOrder(
           stopSide,
           toPrice1Decimal(activationPrice),
@@ -601,12 +601,11 @@ async function trendStrategy() {
       }
       if (pnl < -LOSS_LIMIT || pos.unrealizedProfit < -LOSS_LIMIT) {
         if (openOrders.length > 0) {
-          isOperating = true;
+          isOperating("MARKET");
           const orderIdList = openOrders.map(o => o.orderId);
           await aster.cancelOrders({ symbol: TRADE_SYMBOL, orderIdList });
-          pendingOrderId = null;
         }
-        isOperating = true;
+        isOperating("MARKET");
         await marketClose(direction === "long" ? "SELL" : "BUY");
         lastOpenOrderPrice = null;
         lastOpenOrderSide = null;
@@ -643,11 +642,10 @@ async function trendStrategy() {
           }
           if (needCloseOrder && closeSide && closePrice) {
             if (openOrders.length > 0) {
-              isOperating = true;
+              isOperating("MARKET");
               await aster.cancelAllOrders({ symbol: TRADE_SYMBOL });
-              pendingOrderId = null;
             }
-            isOperating = true;
+            isOperating("MARKET");
             await placeOrder(
               closeSide,
               closePrice,
@@ -666,9 +664,8 @@ async function trendStrategy() {
         } else {
           if (pendingCloseOrder) {
             if (openOrders.length > 0) {
-              isOperating = true;
+              isOperating("MARKET");
               await aster.cancelAllOrders({ symbol: TRADE_SYMBOL });
-              pendingOrderId = null;
             }
             pendingCloseOrder = null;
             lastCloseOrderSide = null;
