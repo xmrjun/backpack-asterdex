@@ -392,25 +392,6 @@ async function placeTrailingStopOrder(
   activationPrice: number,
   quantity: number
 ) {
-  if (!tickerSnapshot) {
-    logTrade("error", `动态止盈单挂单失败：无法获取最新价格`);
-    return;
-  }
-  const last = parseFloat(tickerSnapshot.lastPrice);
-  if (side === "SELL" && activationPrice <= last) {
-    logTrade(
-      "error",
-      `动态止盈单激活价(${activationPrice})低于或等于当前价(${last})，不挂单`
-    );
-    return;
-  }
-  if (side === "BUY" && activationPrice >= last) {
-    logTrade(
-      "error",
-      `动态止盈单激活价(${activationPrice})高于或等于当前价(${last})，不挂单`
-    );
-    return;
-  }
   const params: CreateOrderParams = {
     symbol: TRADE_SYMBOL,
     side,
