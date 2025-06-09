@@ -1158,12 +1158,27 @@ export class Aster {
             try {
                 // 1. 轮询账户信息
                 const account = await this.getAccount();
-                this.accountSnapshot = account;
+                if (this.accountSnapshot) {
+                    // 直接用新数据的所有字段替换原有内容（无缝覆盖，不clear对象）
+                    Object.keys(account).forEach(key => {
+                        this.accountSnapshot[key] = account[key];
+                    });
+                } else {
+                    this.accountSnapshot = account;
+                }
                 this.accountUpdateCallbacks.forEach(cb => cb(this.accountSnapshot));
 
                 // 2. 轮询挂单信息
                 const openOrders = await this.getOpenOrders({ symbol: this.defaultMarket });
-                this.openOrders.clear();
+                // 不clear，直接用新数据替换Map内容
+                // 先删除Map中已不在新列表的订单
+                const newOrderIds = new Set(openOrders.map((o: any) => o.orderId));
+                for (const id of Array.from(this.openOrders.keys())) {
+                    if (!newOrderIds.has(id)) {
+                        this.openOrders.delete(id);
+                    }
+                }
+                // 再更新和新增
                 for (const order of openOrders) {
                     this.openOrders.set(order.orderId, order);
                 }

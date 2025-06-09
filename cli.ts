@@ -3,7 +3,6 @@ import { Command } from "commander";
 import chalk from "chalk";
 import Table from "cli-table3";
 import ora from "ora";
-import readline from "readline";
 import {
   startArbBot,
   getStats,
