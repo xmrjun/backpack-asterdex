@@ -1,6 +1,6 @@
 import { pro as ccxt } from "ccxt";
 import "dotenv/config";
-import { TRADE_SYMBOL } from "./config";
+import { TRADE_SYMBOL, TRADE_AMOUNT, LOSS_LIMIT } from "./config";
 
 const asterPrivate = new ccxt.binance({
   apiKey: process.env.ASTER_API_KEY,
@@ -55,9 +55,6 @@ const aster = new ccxt.binance({
     },
   },
 });
-
-const TRADE_AMOUNT = 0.001;
-const LOSS_LIMIT = 0.1; // 亏损超过0.1u强制平仓
 
 let position: "long" | "short" | "none" = "none";
 let entryPrice = 0;

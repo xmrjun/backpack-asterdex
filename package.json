@@ -5,7 +5,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "start": "tsx cli.ts start",
+    "start": "tsx trendV2.ts",
     "maker": "tsx maker.ts",
     "trend": "tsx trend.ts",
     "trendV2": "tsx trendV2.ts",

@@ -239,6 +239,7 @@ export class Aster {
     private lastKlines: any[] = [];
     private klineSymbol: string = '';
     private klineInterval: string = '';
+    private pollingIntervalId?: ReturnType<typeof setInterval>;
     constructor(private readonly apiKey: string, private readonly apiSecret: string, defaultMarket: string = 'BTCUSDT') {
         this.apiKey = apiKey;
         this.apiSecret = apiSecret;
@@ -247,6 +248,7 @@ export class Aster {
         this.defaultMarket = defaultMarket;
 
         this.initWebSocket();
+        this.startPolling(); // 启动定时轮询
     }
 
     private initWebSocket() {
@@ -543,6 +545,7 @@ export class Aster {
             clearInterval(this.listenKeyKeepAliveIntervalId);
             this.listenKeyKeepAliveIntervalId = undefined;
         }
+        this.stopPolling(); // 停止定时轮询
     }
 
     public async subscribeAggregatedTrade(symbol: string) {
@@ -1148,5 +1151,33 @@ export class Aster {
             lastTradeId: k.L,
             isClosed: k.x
         };
+    }
+
+    private startPolling() {
+        this.pollingIntervalId = setInterval(async () => {
+            try {
+                // 1. 轮询账户信息
+                const account = await this.getAccount();
+                this.accountSnapshot = account;
+                this.accountUpdateCallbacks.forEach(cb => cb(this.accountSnapshot));
+
+                // 2. 轮询挂单信息
+                const openOrders = await this.getOpenOrders({ symbol: this.defaultMarket });
+                this.openOrders.clear();
+                for (const order of openOrders) {
+                    this.openOrders.set(order.orderId, order);
+                }
+                this.orderUpdateCallbacks.forEach(cb => cb(Array.from(this.openOrders.values())));
+            } catch (err) {
+                console.error("定时轮询失败:", err);
+            }
+        }, 10000); // 每10秒
+    }
+
+    private stopPolling() {
+        if (this.pollingIntervalId) {
+            clearInterval(this.pollingIntervalId);
+            this.pollingIntervalId = undefined;
+        }
     }
 }
