@@ -82,8 +82,6 @@ npx tsx maker.ts
 #### 3. 启动双交易所对冲策略(bitget/aster)
 
 ```bash
-pnpm start
-# 或
 pnpm cli:start
 ```
 
@@ -91,8 +89,6 @@ pnpm cli:start
 
 ```bash
 pnpm test
-# 或
-npx tsx test.ts
 ```
 
 ## 主要文件说明
