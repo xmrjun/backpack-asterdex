@@ -1,5 +1,7 @@
 # aster-bot 说明文档
 
+[English README](README_en.md)
+
 ## 项目简介
 
 aster-bot 是一个用于在 AsterDex 交易所进行自动化交易和监控的机器人。项目支持多种自动化交易策略，包括趋势策略和做市策略，适用于数字货币量化交易、套利等场景。
