@@ -194,3 +194,36 @@ export async function placeTrailingStopOrder(aster: Aster, openOrders: AsterOrde
     throw e;
   }
 }
+
+export async function placeMarketOrder(
+  aster: Aster,
+  openOrders: AsterOrder[],
+  orderTypeLocks: { [key: string]: boolean },
+  orderTypeUnlockTimer: { [key: string]: NodeJS.Timeout | null },
+  orderTypePendingOrderId: { [key: string]: string | null },
+  side: "BUY" | "SELL",
+  amount: number,
+  logTrade: (type: string, detail: string) => void,
+  reduceOnly = false
+) {
+  const type = "MARKET";
+  if (isOperating(orderTypeLocks, type)) return;
+  const params: CreateOrderParams = {
+    symbol: TRADE_SYMBOL,
+    side,
+    type,
+    quantity: toQty3Decimal(amount),
+  };
+  if (reduceOnly) params.reduceOnly = "true";
+  await deduplicateOrders(aster, openOrders, orderTypeLocks, orderTypeUnlockTimer, orderTypePendingOrderId, type, side, logTrade);
+  lockOperating(orderTypeLocks, orderTypeUnlockTimer, orderTypePendingOrderId, type, logTrade);
+  try {
+    const order = await aster.createOrder(params);
+    orderTypePendingOrderId[type] = order.orderId;
+    logTrade("order", `市价下单: ${side} 数量: ${params.quantity} reduceOnly: ${reduceOnly}`);
+    return order;
+  } catch (e) {
+    unlockOperating(orderTypeLocks, orderTypeUnlockTimer, orderTypePendingOrderId, type);
+    throw e;
+  }
+}

@@ -159,7 +159,7 @@ async function marketClose(side: "SELL" | "BUY") {
       side,
       type: "MARKET",
       quantity: TRADE_AMOUNT,
-      closePosition: true
+      reduceOnly: true
     });
   } catch (e) {
     console.log("市价平仓失败", e);
