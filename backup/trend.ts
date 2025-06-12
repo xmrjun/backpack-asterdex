@@ -1,7 +1,7 @@
 import { pro as ccxt } from "ccxt";
 import "dotenv/config";
 import chalk from "chalk";
-import { TRADE_SYMBOL, TRADE_AMOUNT, LOSS_LIMIT, STOP_LOSS_DIST, TRAILING_PROFIT, TRAILING_CALLBACK_RATE } from "./config";
+import { TRADE_SYMBOL, TRADE_AMOUNT, LOSS_LIMIT, STOP_LOSS_DIST, TRAILING_PROFIT, TRAILING_CALLBACK_RATE } from "../config";
 
 const asterPrivate = new ccxt.binance({
   apiKey: process.env.ASTER_API_KEY,
