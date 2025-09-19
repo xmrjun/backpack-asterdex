@@ -135,6 +135,6 @@ pnpm test
 - Refer to official API documentation to ensure correct API usage.
 - It is recommended to run on a cloud server or a local stable network environment.
 
----
+## CopyRight
 
-For more detailed instructions or other customization needs, please provide specific questions!
+Made by [RitMEX](https://ritmex.one) with love.
