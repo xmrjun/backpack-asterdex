@@ -5,6 +5,9 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
+    "volume": "tsx volume-hedge-bot.ts",
+    "btc": "tsx volume-hedge-bot.ts",
+    "eth": "TRADE_SYMBOL=ETHUSDT tsx volume-hedge-bot.ts",
     "start": "tsx trendV2.ts",
     "maker": "tsx maker.ts",
     "trend": "tsx trendV2.ts",
@@ -19,17 +22,20 @@
   "license": "ISC",
   "packageManager": "pnpm@10.11.1",
   "dependencies": {
+    "axios": "^1.8.4",
+    "bs58": "^6.0.0",
     "ccxt": "^4.4.88",
     "chalk": "^5.4.1",
     "cli-table3": "^0.6.5",
     "commander": "^14.0.0",
     "dotenv": "^16.5.0",
     "ora": "^8.2.0",
-    "ws": "^8.18.2"
+    "tweetnacl": "^1.0.3",
+    "ws": "^8.18.3"
   },
   "devDependencies": {
     "@types/node": "^22.15.30",
-    "tsx": "^4.19.4",
+    "tsx": "^4.20.6",
     "vitest": "^3.2.2"
   }
 }

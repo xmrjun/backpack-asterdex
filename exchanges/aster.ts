@@ -1,4 +1,8 @@
 import crypto from 'crypto';
+import WebSocket from 'ws';
+
+// WebSocket polyfill for Node.js
+globalThis.WebSocket = WebSocket as any;
 
 export type StringBoolean = "true" | "false";
 
