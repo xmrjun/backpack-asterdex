@@ -89,15 +89,11 @@ export class AsterAPI {
 
     const data = response.data;
 
-    // 格式化为CCXT兼容格式
-    return {
-      id: data.orderId,
-      symbol: data.symbol,
-      side: data.side.toLowerCase(),
-      amount: parseFloat(data.origQty),
-      price: data.price ? parseFloat(data.price) : null,
-      status: data.status.toLowerCase()
-    };
+    // 🔍 调试：打印原始API响应
+    console.log('🔍 AsterDx原始API响应:', JSON.stringify(data, null, 2));
+
+    // 直接返回原始数据，保留所有字段
+    return data;
   }
 
   // 下市价单
@@ -130,15 +126,58 @@ export class AsterAPI {
 
     const data = response.data;
 
-    // 格式化为CCXT兼容格式
-    return {
-      id: data.orderId,
-      symbol: data.symbol,
-      side: data.side.toLowerCase(),
-      amount: parseFloat(data.origQty),
-      price: data.price ? parseFloat(data.price) : null,
-      status: data.status.toLowerCase()
-    };
+    // 🔍 调试：打印原始API响应
+    console.log('🔍 AsterDx原始API响应:', JSON.stringify(data, null, 2));
+
+    // 直接返回原始数据，保留所有字段
+    return data;
+  }
+
+  // 查询订单状态（获取成交价格）
+  async fetchOrder(orderId: string, symbol: string): Promise<any> {
+    const timestamp = Date.now().toString();
+    const queryString = `orderId=${orderId}&symbol=${symbol}&timestamp=${timestamp}`;
+    const signature = this.createSignature(queryString);
+
+    const url = `${this.baseURL}/fapi/v1/order?${queryString}&signature=${signature}`;
+
+    try {
+      const response = await axios.get(url, {
+        headers: {
+          'X-MBX-APIKEY': this.config.apiKey,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      console.log('📊 订单状态查询:', JSON.stringify(response.data, null, 2));
+      return response.data;
+    } catch (error) {
+      console.error('❌ 查询订单失败:', error);
+      throw error;
+    }
+  }
+
+  // 查询持仓
+  async fetchPositions(): Promise<any> {
+    const timestamp = Date.now().toString();
+    const queryString = `timestamp=${timestamp}`;
+    const signature = this.createSignature(queryString);
+
+    const url = `${this.baseURL}/fapi/v1/positionRisk?${queryString}&signature=${signature}`;
+
+    try {
+      const response = await axios.get(url, {
+        headers: {
+          'X-MBX-APIKEY': this.config.apiKey,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      return response.data;
+    } catch (error) {
+      console.error('❌ 查询持仓失败:', error);
+      throw error;
+    }
   }
 }
 

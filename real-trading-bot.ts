@@ -3,8 +3,14 @@ import dotenv from 'dotenv';
 
 // 明确加载.env文件
 dotenv.config();
-import { WebSocketPriceManager } from "./websocket-price-manager.js";
+import { EnhancedWebSocketManager } from "./utils/enhanced-websocket-manager.js";
 import AsterAPI from "./aster-api.js";
+import { SimpleTrader } from "./utils/simple-trader.js";
+import { tradeHistory } from "./utils/trade-history.js";
+import { globalAdaptiveLock } from "./utils/adaptive-lock.js";
+import { globalConnectionPool } from "./utils/connection-pool.js";
+import { globalPerformanceMonitor } from "./utils/performance-monitor.js";
+import { RealFeeTracker } from "./utils/real-fee-tracker.js";
 import {
   TRADE_SYMBOL,
   TRADE_AMOUNT,
@@ -19,8 +25,8 @@ import {
   DAILY_TRADES_TARGET,
 } from "./config.js";
 
-// 🚀 双WebSocket价格管理器
-const priceManager = new WebSocketPriceManager(
+// 🚀 增强双WebSocket价格管理器 - 激活AsterDx高级功能
+const priceManager = new EnhancedWebSocketManager(
   process.env.ASTER_API_KEY!,
   process.env.ASTER_API_SECRET!
 );
@@ -40,6 +46,9 @@ const backpackPrivate = new ccxt.backpack({
   }
 });
 
+// 🚀 简化的交易执行器
+const simpleTrader = new SimpleTrader(asterPrivate, backpackPrivate);
+
 // 符号转换函数
 function getBackpackSymbol(asterSymbol: string): string {
   if (asterSymbol === "BTCUSDT") return "BTC/USDC:USDC";
@@ -47,22 +56,10 @@ function getBackpackSymbol(asterSymbol: string): string {
   return asterSymbol;
 }
 
-// 时间锁管理
-let lastTradeTime = 0;
-const TRADE_LOCK_DURATION = 3000; // 3秒时间锁
-
-// 检查和等待时间锁
+// 替换为自适应时间锁管理
 async function waitForTradeLock(): Promise<void> {
-  const now = Date.now();
-  const timeSinceLastTrade = now - lastTradeTime;
-
-  if (timeSinceLastTrade < TRADE_LOCK_DURATION) {
-    const waitTime = TRADE_LOCK_DURATION - timeSinceLastTrade;
-    log(`⏰ 时间锁等待 ${waitTime}ms | 上次交易: ${new Date(lastTradeTime).toLocaleTimeString()}`, 'info');
-    await new Promise(resolve => setTimeout(resolve, waitTime));
-  }
-
-  lastTradeTime = Date.now();
+  const lockDuration = await globalAdaptiveLock.waitForOptimalTiming();
+  log(`⏰ 自适应时间锁: ${lockDuration}ms`, 'info');
 }
 
 // 🔄 双WebSocket价格获取函数 - 替代旧的单独实现
@@ -124,16 +121,14 @@ function fixBackpackPrice(price: number, symbol: string): string {
 }
 
 // 统计数据
-let stats = {
+let stats: any = {
   dailyVolume: 0,
   dailyTrades: 0,
   dailyProfit: 0,
   positions: [],
-  currentGroup: {
-    direction: null,
-    totalAmount: 0,
-    positions: [],
-    firstOpenTime: 0,
+  // 使用持仓管理器的getter，保持兼容性
+  get currentGroup() {
+    return globalPositionManager.getCurrentGroup();
   }
 };
 
@@ -244,10 +239,10 @@ async function placeAsterOrder(side: "BUY" | "SELL", amount: number, price?: num
     let order;
     if (price) {
       // 限价单
-      order = await asterPrivate.createOrder(TRADE_SYMBOL, 'limit', side.toLowerCase(), amount, price, params);
+      order = await asterPrivate.createOrder(TRADE_SYMBOL, 'limit', side.toLowerCase() as 'buy' | 'sell', amount, price, params);
     } else {
       // 市价单 - 使用CCXT标准方法
-      order = await asterPrivate.createMarketOrder(TRADE_SYMBOL, side.toLowerCase(), amount, undefined, params);
+      order = await asterPrivate.createMarketOrder(TRADE_SYMBOL, side.toLowerCase() as 'buy' | 'sell', amount, undefined, params);
     }
 
     log(`[AsterDex] ${side} ${amount} @ ${price || 'Market'} | 订单ID: ${order?.id}`, 'success');
@@ -258,9 +253,9 @@ async function placeAsterOrder(side: "BUY" | "SELL", amount: number, price?: num
   }
 }
 
-// 执行加仓
-async function executeAddPosition(type, prices) {
-  // 🔒 应用3秒时间锁
+// 执行加仓 - 使用Race-First优化
+async function executeAddPosition(type: any, prices: any) {
+  // 🔒 应用自适应时间锁
   await waitForTradeLock();
 
   const group = stats.currentGroup;
@@ -274,46 +269,75 @@ async function executeAddPosition(type, prices) {
   }
 
   try {
-    let asterSuccess = false;
-    let backpackSuccess = false;
+    // 准备订单参数
+    const asterSide = type === 'buy_aster_sell_backpack' ? 'BUY' : 'SELL';
+    const backpackSide = type === 'buy_aster_sell_backpack' ? 'Ask' : 'Bid';
+    const backpackSymbol = getBackpackSymbol(TRADE_SYMBOL);
 
-    // AsterDex下单 (使用市价单)
-    if (type === 'buy_aster_sell_backpack') {
-      log(`[AsterDex] 市价买入 ${TRADE_AMOUNT}`, 'success');
-      const asterOrder = await placeAsterOrder('BUY', TRADE_AMOUNT);
-      asterSuccess = asterOrder?.id;
-    } else {
-      log(`[AsterDex] 市价卖出 ${TRADE_AMOUNT}`, 'success');
-      const asterOrder = await placeAsterOrder('SELL', TRADE_AMOUNT);
-      asterSuccess = asterOrder?.id;
+    log(`📤 Race-First并发下单: [AsterDx] ${asterSide} | [Backpack] ${backpackSide} | 数量: ${TRADE_AMOUNT}`, 'info');
+
+    // 🚀 使用Race-First执行引擎，极速并发下单
+    const raceResult = await globalRaceExecutor.executeRaceOrders(
+      () => placeAsterOrder(asterSide, TRADE_AMOUNT),
+      () => backpackPrivate.createMarketOrder(backpackSymbol, backpackSide, TRADE_AMOUNT),
+      'open'
+    );
+
+    // 更新自适应时间锁统计
+    globalAdaptiveLock.updateExecutionTime(raceResult.totalExecutionTime, raceResult.bothSuccessful);
+
+    // 检查结果
+    const asterSuccess = raceResult.results.find(r => r.exchange === 'aster')?.success;
+    const backpackSuccess = raceResult.results.find(r => r.exchange === 'backpack')?.success;
+
+    if (!asterSuccess) {
+      const asterError = raceResult.results.find(r => r.exchange === 'aster')?.error;
+      log(`❌ [AsterDx] 下单失败: ${asterError}`, 'error');
+    }
+    if (!backpackSuccess) {
+      const backpackError = raceResult.results.find(r => r.exchange === 'backpack')?.error;
+      log(`❌ [Backpack] 下单失败: ${backpackError}`, 'error');
     }
 
-    // Backpack 5x杠杆合约下单
-    if (asterSuccess) {
-      const backpackSide = type === 'buy_aster_sell_backpack' ? 'Ask' : 'Bid';
-      const backpackSymbol = getBackpackSymbol(TRADE_SYMBOL);
-      log(`[Backpack] ${backpackSide} ${TRADE_AMOUNT} @ ${prices.backpackPrice}`, 'success');
+    log(`⚡ Race执行统计: 总时间${raceResult.totalExecutionTime.toFixed(2)}ms | 时间差${raceResult.timeDifference.toFixed(2)}μs | 首完成${raceResult.firstCompleted}`, 'info');
 
-      const backpackOrder = await backpackPrivate.createMarketOrder(
-        getBackpackSymbol(TRADE_SYMBOL),
-        backpackSide,
-        TRADE_AMOUNT
-      );
-
-      backpackSuccess = backpackOrder?.id;
-    }
+    // 监控单边风险
+    await globalRaceExecutor.monitorSingleSideRisk(raceResult, 5000);
 
     // 只有两边都成功才记录仓位
-    if (asterSuccess && backpackSuccess) {
-      // 记录仓位
+    if (raceResult.bothSuccessful) {
+      // 🔍 查询实际成交价格（重要！）
+      const asterOrder = raceResult.results.find(r => r.exchange === 'aster')?.order;
+      const backpackOrder = raceResult.results.find(r => r.exchange === 'backpack')?.order;
+
+      // 如果AsterDx返回的avgPrice是0，等待并查询
+      let asterActualPrice = asterOrder?.avgPrice || asterOrder?.price || prices.asterPrice;
+      if (asterOrder?.orderId && (!asterActualPrice || asterActualPrice === '0' || asterActualPrice === 0)) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        try {
+          const orderDetail = await asterPrivate.fetchOrder(asterOrder.orderId, TRADE_SYMBOL);
+          asterActualPrice = orderDetail.avgPrice || prices.asterPrice;
+          log(`📊 AsterDx实际成交价格: ${asterActualPrice}`, 'info');
+        } catch (e) {
+          log(`⚠️ 无法查询AsterDx成交价格，使用市场价: ${prices.asterPrice}`, 'warn');
+        }
+      }
+
+      // Backpack通常立即返回成交价格
+      const backpackActualPrice = backpackOrder?.price || prices.backpackPrice.lastPrice;
+
+      // 记录仓位（包含实际成交价格）
       const position = {
         asterSide: type === 'buy_aster_sell_backpack' ? 'BUY' : 'SELL',
         backpackSide: type === 'buy_aster_sell_backpack' ? 'Ask' : 'Bid',
         amount: TRADE_AMOUNT,
-        asterPrice: prices.asterPrice,
-        backpackPrice: prices.backpackPrice,
+        asterPrice: parseFloat(asterActualPrice),  // 实际成交价
+        backpackPrice: parseFloat(backpackActualPrice),  // 实际成交价
+        asterOrderId: asterOrder?.orderId || asterOrder?.id,
+        backpackOrderId: backpackOrder?.id,
         timestamp: Date.now(),
         spread: prices.spread,
+        status: 'open'  // 标记为未平仓
       };
 
       group.positions.push(position);
@@ -321,32 +345,13 @@ async function executeAddPosition(type, prices) {
       group.totalAmount += TRADE_AMOUNT;
 
       stats.dailyTrades++;
-      stats.dailyVolume += TRADE_AMOUNT * prices.asterPrice * 2;
+      stats.dailyVolume += TRADE_AMOUNT * prices.asterPrice;  // 单边交易量，不需要乘2
 
       log(`✅ 加仓成功 | 第${group.positions.length}仓 | 累计: ${group.totalAmount.toFixed(6)} | 今日交易量: ${stats.dailyVolume.toFixed(2)} USDT`, 'success');
     } else {
-      log(`❌ 对冲失败，开始清理单边订单`, 'error');
-
-      // 如果AsterDx下单成功但Backpack失败，需要反向平仓AsterDx
-      if (asterSuccess && !backpackSuccess) {
-        log(`🔄 AsterDx成功但Backpack失败，平仓AsterDx单边持仓`, 'warn');
-        const reverseSide = type === 'buy_aster_sell_backpack' ? 'SELL' : 'BUY';
-        await placeAsterOrder(reverseSide, TRADE_AMOUNT, undefined, true);
-      }
-
-      // 如果Backpack成功但AsterDx失败 (理论上不会发生，因为Backpack在AsterDx成功后才下单)
-      if (!asterSuccess && backpackSuccess) {
-        log(`🔄 Backpack成功但AsterDx失败，平仓Backpack单边持仓`, 'warn');
-        const backpackCloseSide = type === 'buy_aster_sell_backpack' ? 'Bid' : 'Ask';
-        await backpackPrivate.createMarketOrder(
-          getBackpackSymbol(TRADE_SYMBOL),
-          backpackCloseSide,
-          TRADE_AMOUNT,
-          undefined,
-          undefined,
-          { reduceOnly: true }
-        );
-      }
+      log(`❌ 单边下单失败，跳过本次交易`, 'error');
+      log(`⚠️ 如有单边持仓，请手动检查交易所并平仓`, 'warn');
+      return;
     }
 
   } catch (error) {
@@ -354,16 +359,17 @@ async function executeAddPosition(type, prices) {
   }
 }
 
-// 平仓所有持仓
+// 平仓所有持仓 - 使用Race-First优化
 async function closeAllPositions() {
-  // 🔒 应用3秒时间锁
+  // 🔒 应用自适应时间锁
   await waitForTradeLock();
 
   const group = stats.currentGroup;
   if (!group.direction) return;
 
   const holdTime = Date.now() - group.firstOpenTime;
-  log(`🔄 开始平仓 | 方向: ${group.direction} | 总持仓: ${group.totalAmount.toFixed(6)} | 持仓时间: ${(holdTime/60000).toFixed(1)}分钟`, 'warn');
+  const totalAmount = parseFloat(String(group.totalAmount || 0));
+  log(`🔄 开始Race-First平仓 | 方向: ${group.direction} | 总持仓: ${totalAmount.toFixed(6)} | 持仓时间: ${(holdTime/60000).toFixed(1)}分钟`, 'warn');
 
   try {
     const positionsToClose = [...group.positions]; // 复制数组避免修改影响循环
@@ -399,25 +405,43 @@ async function closeAllPositions() {
         }
       }
 
-      log(`🔄 平仓第${i+1}/${positionsToClose.length}个仓位 | 数量: ${position.amount}`, 'info');
+      log(`🔄 Race-First平仓第${i+1}/${positionsToClose.length}个仓位 | 数量: ${position.amount}`, 'info');
 
-      // AsterDx平仓
+      // 准备平仓参数
       const asterCloseSide = position.asterSide === 'BUY' ? 'SELL' : 'BUY';
-      await placeAsterOrder(asterCloseSide, position.amount, undefined, true);
-
-      // Backpack 5x杠杆合约平仓
       const backpackCloseSide = position.backpackSide === 'Ask' ? 'Bid' : 'Ask';
-      await backpackPrivate.createMarketOrder(
-        getBackpackSymbol(TRADE_SYMBOL),
-        backpackCloseSide,
-        position.amount,
-        undefined,
-        undefined,
-        { reduceOnly: true }
+
+      // 🚀 使用Race-First执行引擎，极速并发平仓
+      const raceResult = await globalRaceExecutor.executeRaceOrders(
+        () => placeAsterOrder(asterCloseSide, position.amount, undefined, true),
+        () => backpackPrivate.createMarketOrder(
+          getBackpackSymbol(TRADE_SYMBOL),
+          backpackCloseSide,
+          position.amount,
+          undefined,
+          undefined,
+          { reduceOnly: true }
+        ),
+        'close'
       );
 
-      closedCount++;
-      log(`✅ 第${i+1}个仓位平仓完成`, 'success');
+      // 更新自适应时间锁统计
+      globalAdaptiveLock.updateExecutionTime(raceResult.totalExecutionTime, raceResult.bothSuccessful);
+
+      if (raceResult.bothSuccessful) {
+        closedCount++;
+        log(`✅ 第${i+1}个仓位Race平仓完成 | 时间差${raceResult.timeDifference.toFixed(2)}μs`, 'success');
+      } else {
+        // 监控单边风险
+        await globalRaceExecutor.monitorSingleSideRisk(raceResult, 3000);
+
+        // 记录失败详情
+        raceResult.results.forEach(result => {
+          if (!result.success) {
+            log(`❌ ${result.exchange} 平仓失败: ${result.error}`, 'error');
+          }
+        });
+      }
     }
 
     log(`📊 平仓汇总: ${closedCount}/${positionsToClose.length} 个仓位已平仓`, 'info');
@@ -462,18 +486,168 @@ function printStats() {
 
 // 主程序
 async function main() {
-  log('🚀 启动 AsterDex <-> Backpack 真实5x杠杆对冲交易机器人', 'success');
+  log('🚀 启动 AsterDx <-> Backpack Race-First优化交易机器人', 'success');
   log(`目标: ${DAILY_VOLUME_TARGET} USDT交易量, ${DAILY_TRADES_TARGET}笔交易`, 'info');
   log(`交易符号: ${TRADE_SYMBOL} (${TRADE_AMOUNT}) → ${getBackpackSymbol(TRADE_SYMBOL)}`, 'info');
 
+  // 初始化连接池预热
+  log('🔥 预热连接池...', 'info');
+  await globalConnectionPool.warmupConnections();
+
   // 初始化双WebSocket价格管理器
-  log('🚀 初始化双WebSocket价格管理器...', 'info');
+  log('🚀 初始化增强双WebSocket价格管理器...', 'info');
   await priceManager.initializeAll();
 
-  // 显示连接状态
+  // 初始化真实费用追踪器
+  log('💰 初始化费用追踪器...', 'info');
+  const feeTracker = new RealFeeTracker(priceManager.asterSDK, backpackPrivate);
+
+  // 🚀 激活AsterDx高级WebSocket功能
+  log('📊 注册WebSocket实时数据回调...', 'info');
+
+  // 订单状态更新回调
+  priceManager.onOrderStatusUpdate((orders) => {
+    orders.forEach(order => {
+      log(`📊 订单更新: ${order.symbol} ${order.side} ${order.status} 价格:${order.avgPrice} 数量:${order.executedQty}`, 'info');
+
+      // 🚀 更新到持仓管理器
+      globalPositionManager.updatePosition({
+        orderId: order.orderId.toString(),
+        symbol: order.symbol,
+        side: order.side,
+        amount: parseFloat(order.executedQty || '0'),
+        price: parseFloat(order.avgPrice || '0'),
+        exchange: 'AsterDx',
+        openTime: order.updateTime,
+        status: order.status
+      });
+
+      // 兼容性：更新统计数据中的订单状态
+      const existingPos = stats.positions.find(p => p.orderId === order.orderId);
+      if (existingPos) {
+        existingPos.status = order.status;
+        existingPos.avgPrice = order.avgPrice;
+        existingPos.executedQty = order.executedQty;
+        existingPos.updateTime = order.updateTime;
+      }
+    });
+  });
+
+  // 账户余额变化回调
+  priceManager.onAccountBalanceUpdate((balances) => {
+    balances.forEach(balance => {
+      if (parseFloat(balance.walletBalance) > 0) {
+        log(`💰 余额更新: ${balance.asset} 钱包:${balance.walletBalance} 可用:${balance.availableBalance}`, 'info');
+      }
+    });
+  });
+
+  // 成交记录推送回调
+  priceManager.onTradeExecution((trade) => {
+    const profit = parseFloat(trade.executedQty) * parseFloat(trade.executedPrice);
+    log(`📈 成交执行: ${trade.symbol} ${trade.side} 数量:${trade.executedQty} 价格:${trade.executedPrice} 手续费:${trade.commission}${trade.commissionAsset}`, 'success');
+
+    // 更新日交易统计
+    stats.dailyTrades++;
+    stats.dailyVolume += profit;
+  });
+
+  // 🚀 注册Backpack私有WebSocket回调
+  priceManager.onBackpackOrderUpdate((data) => {
+    log(`📊 Backpack订单更新: ${JSON.stringify(data)}`, 'info');
+
+    // 🚀 更新到持仓管理器
+    if (data.orderId && data.status) {
+      globalPositionManager.updatePosition({
+        orderId: data.orderId.toString(),
+        symbol: data.symbol || TRADE_SYMBOL,
+        side: data.side || 'unknown',
+        amount: parseFloat(data.executedQty || '0'),
+        price: parseFloat(data.avgPrice || '0'),
+        exchange: 'Backpack',
+        openTime: data.updateTime || Date.now(),
+        status: data.status
+      });
+    }
+  });
+
+  priceManager.onBackpackBalanceUpdate((data) => {
+    log(`💰 Backpack余额更新: ${JSON.stringify(data)}`, 'info');
+  });
+
+  priceManager.onBackpackTradeExecution((data) => {
+    log(`📈 Backpack成交执行: ${JSON.stringify(data)}`, 'success');
+  });
+
+  log('✅ AsterDx + Backpack增强WebSocket功能已激活', 'success');
+
+  // 🚀 启动时同步持仓状态
+  log('🔄 启动时同步持仓状态...', 'info');
+  try {
+    // 查询AsterDx账户信息 (包含持仓)
+    const asterAccount = await asterPrivate.fetchBalance();
+    const asterPositions = asterAccount.positions || [];
+
+    // 查询Backpack持仓
+    const backpackPositions = await backpackPrivate.fetchPositions([`${TRADE_SYMBOL.replace('USDT', '/USDC:USDC')}`]);
+
+    // 同步到持仓管理器
+    await globalPositionManager.syncWithExchange(asterPositions, backpackPositions);
+
+    log(`✅ 持仓同步完成: ${globalPositionManager.getSummary()}`, 'success');
+    log(`📊 AsterDx账户: ${asterPositions.length}个持仓, Backpack: ${backpackPositions.length}个持仓`, 'info');
+  } catch (error) {
+    log(`⚠️ 持仓同步失败: ${error.message}`, 'warn');
+  }
+
+  // 注册实时费用监听
+  priceManager.onRealFee((feeData: any) => {
+    log(`💰 实时费用: ${feeData.exchange} ${feeData.side} $${feeData.fee.toFixed(4)} (${(feeData.feeRate*10000).toFixed(1)}bp) ${feeData.isMaker ? 'Maker' : 'Taker'}`, 'info');
+  });
+
+  // 显示连接状态和性能统计
   setInterval(() => {
     log(priceManager.getPriceStats(), 'info');
-  }, 10000);
+    log(priceManager.getEnhancedStatus(), 'info');
+
+    // 显示优化统计
+    const raceStats = globalRaceExecutor.getStats();
+    const lockStats = globalAdaptiveLock.getStats();
+    const connectionStats = globalConnectionPool.getConnectionStats();
+
+    log(`⚡ 性能优化统计:`, 'info');
+    log(`   Race平均执行: ${raceStats.averageExecutionTime.toFixed(2)}ms | 平均时间差: ${raceStats.averageTimeDifference.toFixed(2)}μs`, 'info');
+    log(`   自适应锁: ${lockStats.currentLockDuration}ms | 连续失败: ${lockStats.consecutiveFailures} | 网络状况: ${(lockStats.networkCondition * 100).toFixed(0)}%`, 'info');
+    log(`   连接池: Aster=${connectionStats.asterConnections} | Backpack=${connectionStats.backpackConnections} | 预热=${connectionStats.isWarmedUp}`, 'info');
+  }, 30000);
+
+  // 每小时显示真实费用报告
+  setInterval(async () => {
+    try {
+      const report = await feeTracker.generateRealTimeReport();
+      log(report, 'info');
+    } catch (error) {
+      log(`⚠️ 费用报告生成失败: ${error.message}`, 'warn');
+    }
+  }, 3600000); // 1小时
+
+  // 🚀 定期持仓验证 (每5分钟)
+  setInterval(async () => {
+    try {
+      log('🔄 定期持仓验证...', 'info');
+      const asterAccount = await asterPrivate.fetchBalance();
+      const asterPositions = asterAccount.positions || [];
+      const backpackPositions = await backpackPrivate.fetchPositions([`${TRADE_SYMBOL.replace('USDT', '/USDC:USDC')}`]);
+      await globalPositionManager.syncWithExchange(asterPositions, backpackPositions);
+
+      // 清理已平仓订单
+      globalPositionManager.removeClosedPositions();
+
+      log(`✅ 持仓验证完成: ${globalPositionManager.getSummary()}`, 'info');
+    } catch (error) {
+      log(`⚠️ 持仓验证失败: ${error.message}`, 'warn');
+    }
+  }, 300000);
 
   // 等待3秒让WebSocket连接建立
   await new Promise(resolve => setTimeout(resolve, 3000));
@@ -483,15 +657,18 @@ async function main() {
     await checkPricesAndTrade();
   }, 3000);
 
-  // 统计报告 - 每30秒一次
-  setInterval(printStats, 30000);
+  // 统计报告 - 每60秒一次 (优化日志频率)
+  setInterval(() => {
+    printStats();
+    globalPerformanceMonitor.printStats();
+  }, 60000);
 
-  log('✅ 机器人已启动，正在监听真实价格差价...', 'success');
+  log('✅ Race-First优化机器人已启动，极速监听价差套利...', 'success');
 }
 
 // 优雅退出
 process.on('SIGINT', async () => {
-  log('正在关闭机器人...', 'warn');
+  log('正在关闭Race-First优化机器人...', 'warn');
 
   // 关闭双WebSocket连接
   try {
@@ -500,6 +677,17 @@ process.on('SIGINT', async () => {
   } catch (error) {
     log(`❌ 关闭WebSocket连接失败: ${error}`, 'error');
   }
+
+  // 关闭连接池
+  try {
+    globalConnectionPool.destroy();
+  } catch (error) {
+    log(`❌ 关闭连接池失败: ${error}`, 'error');
+  }
+
+  // 显示最终性能统计
+  globalPerformanceMonitor.printStats();
+  globalAdaptiveLock.reset();
 
   await closeAllPositions();
   printStats();

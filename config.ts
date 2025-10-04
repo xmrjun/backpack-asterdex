@@ -10,8 +10,8 @@ export const MAX_ADD_POSITIONS = 1; // 不加仓，只做一次
 export const ADD_POSITION_SPREAD = 9999; // 设置很高，禁用加仓
 
 // 开平仓参数
-export const ARB_THRESHOLD = 120; // 120U价差开仓
-export const CLOSE_DIFF = 80; // 80U价差平仓
+export const ARB_THRESHOLD = 150; // 150U价差开仓
+export const CLOSE_DIFF = 60; // 60U价差平仓
 export const PROFIT_DIFF_LIMIT = 5;
 export const LOSS_LIMIT = 0.5;
 export const MAX_SPREAD = 100;
